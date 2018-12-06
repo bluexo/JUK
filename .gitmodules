@@ -1,0 +1,4 @@
+[submodule "Assets/3rd/UnityWorkbox"]
+	path = Assets/3rd/UnityWorkbox
+	url = http://github.com/bluexo/UnityWorkbox
+	branch = master

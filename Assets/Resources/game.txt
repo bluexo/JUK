@@ -1,0 +1,50 @@
+var Shape = function (id, x, y) {
+    this.name = "Alvin";
+    this.id = id;
+    this.move(x, y);
+};
+
+Shape.prototype.move = function (x, y) {
+    this.x = x;
+    this.y = y;
+    Log("Id=" + this.id + "Position:" + "X:" + x + " , Y:" + y);
+    Log(this.name);
+};
+
+var s1 = new Shape(1,10,15);
+var s2 = new Shape(2,11,25);
+
+var ListOfString = System.Collections.Generic.List(System.String);
+var list = new ListOfString();
+list.Add('foo');
+list.Add(1); // automatically converted to String
+Log(list.Count); // 2
+Log(list[0]);
+Log(list[1]);
+
+var numbers = [5, 6, 2, 3, 7];
+var max = Math.max.apply(null, numbers);
+Log(max);
+
+var UnityEngine = importNamespace("UnityEngine");
+var GameObject = importNamespace("UnityEngine.GameObject");
+var go = new GameObject("abc");
+Log(go.name);
+var transform = go.GetComponent(UnityEngine.Transform);
+var txt = UnityEngine.Resources.Load("game", UnityEngine.TextAsset);
+Log(txt.text);
+Log(typeof "" === "string");
+Log(typeof go);
+
+Logger.Log("Number={0},Go={1}")
+
+Startup.text.text = "wtf";
+Startup.CallByJs();
+
+//msgpack test
+
+var obj =  {
+	"Id": 10001,
+	"Name":"Alvin"
+}
+
