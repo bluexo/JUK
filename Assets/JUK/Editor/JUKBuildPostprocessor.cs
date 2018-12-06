@@ -21,7 +21,7 @@ namespace JUK
                 var dest = JUKConfiguration.instance.OutputPath;
                 if (!Directory.Exists(dest))
                     Directory.CreateDirectory(dest);
-                file.CopyTo($"{dest + file.Name}.txt", true);
+                file.CopyTo($"{dest}/{file.Name}.txt", true);
             }
             AssetDatabase.Refresh();
         }

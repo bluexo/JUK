@@ -1,4 +1,4 @@
-var Shape = function (id, x, y) {
+﻿var Shape = function (id, x, y) {
     this.name = "Alvin";
     this.id = id;
     this.move(x, y);
@@ -27,8 +27,7 @@ var max = Math.max.apply(null, numbers);
 Log(max);
 
 var UnityEngine = importNamespace("UnityEngine");
-var GameObject = importNamespace("UnityEngine.GameObject");
-var go = new GameObject("abc");
+var go = new UnityEngine.GameObject("abc");
 Log(go.name);
 var transform = go.GetComponent(UnityEngine.Transform);
 var txt = UnityEngine.Resources.Load("game", UnityEngine.TextAsset);
@@ -43,8 +42,23 @@ Startup.CallByJs();
 
 //msgpack test
 
-var obj =  {
-	"Id": 10001,
-	"Name":"Alvin"
-}
+var data = {
+    number: 123,
+    number2: -0.129,
+    text: "Abc with Üñıçôðé and ユニコード",
+    flag: true,
+    list: [ 1, 2, 3 ],
+    obj: { a: 1, b: "2", c: false, d: { a: 0, b: -1 } },
+    time: Date.now()
+};
+
+Log(data.text);
+
+var buffer = msgpack.pack(data);
+Log(buffer.length);
+
+var decoded = msgpack.unpack(buffer);
+Log(decoded.time);
+
+
 

@@ -1,480 +1,691 @@
-function serializeMsgPack(data) {
-	"use strict";
-	let floatBuffer, floatView;
-	let pow32 = 0x100000000;   // 2^32
-	let array = new Uint8Array(128);
-	let length = 0;
-	append(data);
-	return array.subarray(0, length);
+// === msgpack ===
+// MessagePack -> http://msgpack.sourceforge.net/
 
-	function append(data) {
-		switch (typeof data) {
-			case "undefined":
-				appendNull(data);
-				break;
-			case "boolean":
-				appendBoolean(data);
-				break;
-			case "number":
-				appendNumber(data);
-				break;
-			case "string":
-				appendString(data);
-				break;
-			case "object":
-				if (data === null)
-					appendNull(data);
-				else if (data instanceof Date)
-					appendDate(data);
-				else if (Array.isArray(data))
-					appendArray(data);
-				else if (data instanceof Uint8Array || data instanceof Uint8ClampedArray)
-					appendBinArray(data);
-				else if (data instanceof Int8Array || data instanceof Int16Array || data instanceof Uint16Array ||
-					data instanceof Int32Array || data instanceof Uint32Array ||
-					data instanceof Float32Array || data instanceof Float64Array)
-					appendArray(data);
-				else
-					appendObject(data);
-				break;
-		}
-	}
+this.msgpack || (function(globalScope) {
 
-	function appendNull(data) {
-		appendByte(0xc0);
-	}
+globalScope.msgpack = {
+    pack:       msgpackpack,    // msgpack.pack(data:Mix,
+                                //              toString:Boolean = false):ByteArray/ByteString/false
+                                //  [1][mix to String]    msgpack.pack({}, true) -> "..."
+                                //  [2][mix to ByteArray] msgpack.pack({})       -> [...]
+    unpack:     msgpackunpack,  // msgpack.unpack(data:BinaryString/ByteArray):Mix
+                                //  [1][String to mix]    msgpack.unpack("...") -> {}
+                                //  [2][ByteArray to mix] msgpack.unpack([...]) -> {}
+    worker:     "msgpack.js",   // msgpack.worker - WebWorkers script filename
+    upload:     msgpackupload,  // msgpack.upload(url:String, option:Hash, callback:Function)
+    download:   msgpackdownload // msgpack.download(url:String, option:Hash, callback:Function)
+};
 
-	function appendBoolean(data) {
-		appendByte(data ? 0xc3 : 0xc2);
-	}
+//var _ie         = /MSIE/.test(navigator.userAgent),
+    _bin2num    = {}, // BinaryStringToNumber   { "\00": 0, ... "\ff": 255 }
+    _num2bin    = {}, // NumberToBinaryString   { 0: "\00", ... 255: "\ff" }
+    _num2b64    = ("ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+                   "abcdefghijklmnopqrstuvwxyz0123456789+/").split(""),
+    _buf        = [], // decode buffer
+    _idx        = 0,  // decode buffer[index]
+    _error      = 0,  // msgpack.pack() error code. 1 = CYCLIC_REFERENCE_ERROR
+    _isArray    = Array.isArray || (function(mix) {
+                    return Object.prototype.toString.call(mix) === "[object Array]";
+                  }),
+    _isUint8Array = function(mix) {
+                    return Object.prototype.toString.call(mix) === "[object Uint8Array]";
+                  },
+    _toString   = String.fromCharCode, // CharCode/ByteArray to String
+    _MAX_DEPTH  = 512;
 
-	function appendNumber(data) {
-		if (isFinite(data) && Math.floor(data) === data) {
-			// Integer
-			if (data >= 0 && data <= 0x7f) {
-				appendByte(data);
-			}
-			else if (data < 0 && data >= -0x20) {
-				appendByte(data);
-			}
-			else if (data > 0 && data <= 0xff) {   // uint8
-				appendBytes([0xcc, data]);
-			}
-			else if (data >= -0x80 && data <= 0x7f) {   // int8
-				appendBytes([0xd0, data]);
-			}
-			else if (data > 0 && data <= 0xffff) {   // uint16
-				appendBytes([0xcd, data >>> 8, data]);
-			}
-			else if (data >= -0x8000 && data <= 0x7fff) {   // int16
-				appendBytes([0xd1, data >>> 8, data]);
-			}
-			else if (data > 0 && data <= 0xffffffff) {   // uint32
-				appendBytes([0xce, data >>> 24, data >>> 16, data >>> 8, data]);
-			}
-			else if (data >= -0x80000000 && data <= 0x7fffffff) {   // int32
-				appendBytes([0xd2, data >>> 24, data >>> 16, data >>> 8, data]);
-			}
-			else if (data > 0 && data <= 0xffffffffffffffff) {   // uint64
-				// Split 64 bit number into two 32 bit numbers because JavaScript only regards
-				// 32 bits for bitwise operations.
-				let hi = data / pow32;
-				let lo = data % pow32;
-				appendBytes([0xd3, hi >>> 24, hi >>> 16, hi >>> 8, hi, lo >>> 24, lo >>> 16, lo >>> 8, lo]);
-			}
-			else if (data >= -0x8000000000000000 && data <= 0x7fffffffffffffff) {   // int64
-				// Split 64 bit number into two 32 bit numbers because JavaScript only regards
-				// 32 bits for bitwise operations.
-				let hi, lo;
-				if (data >= 0) {
-					// Same as uint64
-					hi = data / pow32;
-					lo = data % pow32;
-				}
-				else {
-					// Split absolute value to high and low, then NOT and ADD(1) to restore negativity
-					data++;
-					hi = Math.abs(data) / pow32;
-					lo = Math.abs(data) % pow32;
-					hi = ~hi;
-					lo = ~lo;
-				}
-				appendBytes([0xd3, hi >>> 24, hi >>> 16, hi >>> 8, hi, lo >>> 24, lo >>> 16, lo >>> 8, lo]);
-			}
-			else if (data < 0) {   // below int64
-				appendBytes([0xd3, 0x80, 0, 0, 0, 0, 0, 0, 0]);
-			}
-			else {   // above uint64
-				appendBytes([0xcf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-			}
-		}
-		else {
-			// Float
-			if (!floatView) {
-				floatBuffer = new ArrayBuffer(8);
-				floatView = new DataView(floatBuffer);
-			}
-			floatView.setFloat64(0, data);
-			appendByte(0xcb);
-			appendBytes(new Uint8Array(floatBuffer));
-		}
-	}
+// for WebWorkers Code Block
+// self.importScripts && (onmessage = function(event) {
+//     if (event.data.method === "pack") {
+//         postMessage(base64encode(msgpackpack(event.data.data)));
+//     } else {
+//         postMessage(msgpackunpack(event.data.data));
+//     }
+// });
 
-	function appendString(data) {
-		let bytes = encodeUtf8(data);
-		let length = bytes.length;
+// msgpack.pack
+function msgpackpack(data,       // @param Mix:
+                     toString) { // @param Boolean(= false):
+                                 // @return ByteArray/BinaryString/false:
+                                 //     false is error return
+    //  [1][mix to String]    msgpack.pack({}, true) -> "..."
+    //  [2][mix to ByteArray] msgpack.pack({})       -> [...]
 
-		if (length <= 0x1f)
-			appendByte(0xa0 + length);
-		else if (length <= 0xff)
-			appendBytes([0xd9, length]);
-		else if (length <= 0xffff)
-			appendBytes([0xda, length >>> 8, length]);
-		else
-			appendBytes([0xdb, length >>> 24, length >>> 16, length >>> 8, length]);
+    _error = 0;
 
-		appendBytes(bytes);
-	}
+    var byteArray = encode([], data, 0);
 
-	function appendArray(data) {
-		let length = data.length;
-
-		if (length <= 0xf)
-			appendByte(0x90 + length);
-		else if (length <= 0xffff)
-			appendBytes([0xdc, length >>> 8, length]);
-		else
-			appendBytes([0xdd, length >>> 24, length >>> 16, length >>> 8, length]);
-
-		for (let index = 0; index < length; index++) {
-			append(data[index]);
-		}
-	}
-
-	function appendBinArray(data) {
-		let length = data.length;
-
-		if (length <= 0xf)
-			appendBytes([0xc4, length]);
-		else if (length <= 0xffff)
-			appendBytes([0xc5, length >>> 8, length]);
-		else
-			appendBytes([0xc6, length >>> 24, length >>> 16, length >>> 8, length]);
-
-		appendBytes(data);
-	}
-
-	function appendObject(data) {
-		let length = 0;
-		for (let key in data) length++;
-
-		if (length <= 0xf)
-			appendByte(0x80 + length);
-		else if (length <= 0xffff)
-			appendBytes([0xde, length >>> 8, length]);
-		else
-			appendBytes([0xdf, length >>> 24, length >>> 16, length >>> 8, length]);
-
-		for (let key in data) {
-			append(key);
-			append(data[key]);
-		}
-	}
-
-	function appendDate(data) {
-		let seconds = data.getTime() / 1000;
-		if (data.getMilliseconds() === 0 && seconds < 0x100000000) {   // 32 bit seconds
-			appendBytes([0xd6, 0xff, seconds >>> 24, seconds >>> 16, seconds >>> 8, seconds]);
-		}
-		else if (seconds < 0x400000000) {   // 30 bit nanoseconds, 34 bit seconds
-			let nanoseconds = data.getMilliseconds() * 1000000;
-			let seconds = data.getTime() / 1000;
-			appendBytes([0xd7, 0xff, nanoseconds >>> 22, nanoseconds >>> 14, nanoseconds >>> 6, ((nanoseconds << 2) >>> 0) | (seconds / pow32), seconds >>> 24, seconds >>> 16, seconds >>> 8, seconds]);
-		}
-		else {   // 32 bit nanoseconds, 64 bit seconds
-			let nanoseconds = data.getMilliseconds() * 1000000;
-			let seconds = data.getTime() / 1000;
-			let hi = seconds / pow32;
-			let lo = seconds % pow32;
-			appendBytes([0xc7, 12, 0xff, nanoseconds >>> 24, nanoseconds >>> 16, nanoseconds >>> 8, nanoseconds, hi >>> 24, hi >>> 16, hi >>> 8, hi, lo >>> 24, lo >>> 16, lo >>> 8, lo]);
-		}
-	}
-
-	function appendByte(byte) {
-		if (array.length < length + 1) {
-			let newLength = array.length * 2;
-			while (newLength < length + 1)
-				newLength *= 2;
-			let newArray = new Uint8Array(newLength);
-			newArray.set(array);
-			array = newArray;
-		}
-		array[length] = byte;
-		length++;
-	}
-
-	function appendBytes(bytes) {
-		if (array.length < length + bytes.length) {
-			let newLength = array.length * 2;
-			while (newLength < length + bytes.length)
-				newLength *= 2;
-			let newArray = new Uint8Array(newLength);
-			newArray.set(array);
-			array = newArray;
-		}
-		array.set(bytes, length);
-		length += bytes.length;
-	}
-
-	function encodeUtf8(str) {
-		// Prevent excessive array allocation and slicing for all 7-bit characters
-		let ascii = true, length = str.length;
-		for (let x = 0; x < length; x++) {
-			if (str.charCodeAt(x) > 127) {
-				ascii = false;
-				break;
-			}
-		}
-		
-		// Based on: https://gist.github.com/pascaldekloe/62546103a1576803dade9269ccf76330
-		let i = 0, bytes = new Uint8Array(str.length * (ascii ? 1 : 4));
-		for (let ci = 0; ci !== length; ci++) {
-			let c = str.charCodeAt(ci);
-			if (c < 128) {
-				bytes[i++] = c;
-				continue;
-			}
-			if (c < 2048) {
-				bytes[i++] = c >> 6 | 192;
-			}
-			else {
-				if (c > 0xd7ff && c < 0xdc00) {
-					if (++ci >= length)
-						throw new Error("UTF-8 encode: incomplete surrogate pair");
-					let c2 = str.charCodeAt(ci);
-					if (c2 < 0xdc00 || c2 > 0xdfff)
-						throw new Error("UTF-8 encode: second surrogate character 0x" + c2.toString(16) + " at index " + ci + " out of range");
-					c = 0x10000 + ((c & 0x03ff) << 10) + (c2 & 0x03ff);
-					bytes[i++] = c >> 18 | 240;
-					bytes[i++] = c >> 12 & 63 | 128;
-				}
-				else bytes[i++] = c >> 12 | 224;
-				bytes[i++] = c >> 6 & 63 | 128;
-			}
-			bytes[i++] = c & 63 | 128;
-		}
-		return ascii ? bytes : bytes.subarray(0, i);
-	}
+    return _error ? false
+                  : toString ? byteArrayToByteString(byteArray)
+                             : byteArray;
 }
 
-function deserializeMsgPack(array) {
-	"use strict";
-	let pow32 = 0x100000000;   // 2^32
-	let pos = 0;
-	if (!(array instanceof Uint8Array)) {
-		array = new Uint8Array(array);
-	}
-	let data = read();
-	if (pos < array.length) {
-		// Junk data at the end
-	}
-	return data;
+// msgpack.unpack
+function msgpackunpack(data) { // @param BinaryString/ByteArray:
+                               // @return Mix/undefined:
+                               //       undefined is error return
+    //  [1][String to mix]    msgpack.unpack("...") -> {}
+    //  [2][ByteArray to mix] msgpack.unpack([...]) -> {}
 
-	function read() {
-		let byte = array[pos++];
-		if (byte >= 0x00 && byte <= 0x7f) return byte;   // positive fixint
-		if (byte >= 0x80 && byte <= 0x8f) return readMap(byte - 0x80);   // fixmap
-		if (byte >= 0x90 && byte <= 0x9f) return readArray(byte - 0x90);   // fixarray
-		if (byte >= 0xa0 && byte <= 0xbf) return readStr(byte - 0xa0);   // fixstr
-		if (byte === 0xc0) return null;   // nil
-		if (byte === 0xc1) throw new Error("Invalid byte code 0xc1 found.");   // never used
-		if (byte === 0xc2) return false;   // false
-		if (byte === 0xc3) return true;   // true
-		if (byte === 0xc4) return readBin(-1, 1);   // bin 8
-		if (byte === 0xc5) return readBin(-1, 2);   // bin 16
-		if (byte === 0xc6) return readBin(-1, 4);   // bin 32
-		if (byte === 0xc7) return readExt(-1, 1);   // ext 8
-		if (byte === 0xc8) return readExt(-1, 2);   // ext 16
-		if (byte === 0xc9) return readExt(-1, 4);   // ext 32
-		if (byte === 0xca) return readFloat(4);   // float 32
-		if (byte === 0xcb) return readFloat(8);   // float 64
-		if (byte === 0xcc) return readUInt(1);   // uint 8
-		if (byte === 0xcd) return readUInt(2);   // uint 16
-		if (byte === 0xce) return readUInt(4);   // uint 32
-		if (byte === 0xcf) return readUInt(8);   // uint 64
-		if (byte === 0xd0) return readInt(1);   // int 8
-		if (byte === 0xd1) return readInt(2);   // int 16
-		if (byte === 0xd2) return readInt(4);   // int 32
-		if (byte === 0xd3) return readInt(8);   // int 64
-		if (byte === 0xd4) return readExt(1);   // fixext 1
-		if (byte === 0xd5) return readExt(2);   // fixext 2
-		if (byte === 0xd6) return readExt(4);   // fixext 4
-		if (byte === 0xd7) return readExt(8);   // fixext 8
-		if (byte === 0xd8) return readExt(16);   // fixext 16
-		if (byte === 0xd9) return readStr(-1, 1);   // str 8
-		if (byte === 0xda) return readStr(-1, 2);   // str 16
-		if (byte === 0xdb) return readStr(-1, 4);   // str 32
-		if (byte === 0xdc) return readArray(-1, 2);   // array 16
-		if (byte === 0xdd) return readArray(-1, 4);   // array 32
-		if (byte === 0xde) return readMap(-1, 2);   // map 16
-		if (byte === 0xdf) return readMap(-1, 4);   // map 32
-		if (byte >= 0xe0 && byte <= 0xff) return byte - 256;   // negative fixint
-		throw new Error("Matched no byte code. Value is " + byte + ". This should never happen.");
-	}
-
-	function readInt(size) {
-		let value = 0;
-		let first = true;
-		while (size-- > 0) {
-			if (first) {
-				let byte = array[pos++];
-				value += byte & 0x7f;
-				if (byte & 0x80) {
-					value -= 0x80;   // Treat most-significant bit as -2^i instead of 2^i
-				}
-				first = false;
-			}
-			else {
-				value *= 256;
-				value += array[pos++];
-			}
-		}
-		return value;
-	}
-
-	function readUInt(size) {
-		let value = 0;
-		while (size-- > 0) {
-			value *= 256;
-			value += array[pos++];
-		}
-		return value;
-	}
-
-	function readFloat(size) {
-		let view = new DataView(array.buffer, pos, size);
-		pos += size;
-		if (size === 4)
-			return view.getFloat32(0, false);
-		if (size === 8)
-			return view.getFloat64(0, false);
-	}
-
-	function readBin(size, lengthSize) {
-		if (size < 0) size = readUInt(lengthSize);
-		let data = array.subarray(pos, pos + size);
-		pos += size;
-		return data;
-	}
-
-	function readMap(size, lengthSize) {
-		if (size < 0) size = readUInt(lengthSize);
-		let data = {};
-		while (size-- > 0) {
-			let key = read();
-			data[key] = read();
-		}
-		return data;
-	}
-
-	function readArray(size, lengthSize) {
-		if (size < 0) size = readUInt(lengthSize);
-		let data = [];
-		while (size-- > 0) {
-			data.push(read());
-		}
-		return data;
-	}
-
-	function readStr(size, lengthSize) {
-		if (size < 0) size = readUInt(lengthSize);
-		let start = pos;
-		pos += size;
-		return decodeUtf8(array, start, size);
-	}
-
-	function readExt(size, lengthSize) {
-		if (size < 0) size = readUInt(lengthSize);
-		let type = readUInt(1);
-		let data = readBin(size);
-		switch (type) {
-			case 255:
-				return readExtDate(data);
-		}
-		return { type: type, data: data };
-	}
-
-	function readExtDate(data) {
-		if (data.length === 4) {
-			let sec = ((data[0] << 24) >>> 0) +
-				((data[1] << 16) >>> 0) +
-				((data[2] << 8) >>> 0) +
-				data[3];
-			return new Date(sec * 1000);
-		}
-		if (data.length === 8) {
-			let ns = ((data[0] << 22) >>> 0) +
-				((data[1] << 14) >>> 0) +
-				((data[2] << 6) >>> 0) +
-				(data[3] >>> 2);
-			let sec = ((data[3] & 0x3) * pow32) +
-				((data[4] << 24) >>> 0) +
-				((data[5] << 16) >>> 0) +
-				((data[6] << 8) >>> 0) +
-				data[7];
-			return new Date(sec * 1000 + ns / 1000000);
-		}
-		if (data.length === 12) {
-			let ns = ((data[0] << 24) >>> 0) +
-				((data[1] << 16) >>> 0) +
-				((data[2] << 8) >>> 0) +
-				data[3];
-			let hi = ((data[4] << 24) >>> 0) +
-				((data[5] << 16) >>> 0) +
-				((data[6] << 8) >>> 0) +
-				data[7];
-			let lo = ((data[8] << 24) >>> 0) +
-				((data[9] << 16) >>> 0) +
-				((data[10] << 8) >>> 0) +
-				data[11];
-			let sec = hi * pow32 + lo;
-			return new Date(sec * 1000 + ns / 1000000);
-		}
-		throw new Error("Invalid data length for a date value.");
-	}
-
-	function decodeUtf8(bytes, start, length) {
-		// Based on: https://gist.github.com/pascaldekloe/62546103a1576803dade9269ccf76330
-		let i = start, str = "";
-		length += start;
-		while (i < length) {
-			let c = bytes[i++];
-			if (c > 127) {
-				if (c > 191 && c < 224) {
-					if (i >= length)
-						throw new Error("UTF-8 decode: incomplete 2-byte sequence");
-					c = (c & 31) << 6 | bytes[i++] & 63;
-				}
-				else if (c > 223 && c < 240) {
-					if (i + 1 >= length)
-						throw new Error("UTF-8 decode: incomplete 3-byte sequence");
-					c = (c & 15) << 12 | (bytes[i++] & 63) << 6 | bytes[i++] & 63;
-				}
-				else if (c > 239 && c < 248) {
-					if (i + 2 >= length)
-						throw new Error("UTF-8 decode: incomplete 4-byte sequence");
-					c = (c & 7) << 18 | (bytes[i++] & 63) << 12 | (bytes[i++] & 63) << 6 | bytes[i++] & 63;
-				}
-				else throw new Error("UTF-8 decode: unknown multibyte start 0x" + c.toString(16) + " at index " + (i - 1));
-			}
-			if (c <= 0xffff) str += String.fromCharCode(c);
-			else if (c <= 0x10ffff) {
-				c -= 0x10000;
-				str += String.fromCharCode(c >> 10 | 0xd800)
-				str += String.fromCharCode(c & 0x3FF | 0xdc00)
-			}
-			else throw new Error("UTF-8 decode: code point 0x" + c.toString(16) + " exceeds UTF-16 reach");
-		}
-		return str;
-	}
+    _buf = typeof data === "string" ? toByteArray(data) : data;
+    _idx = -1;
+    return decode(); // mix or undefined
 }
+
+// inner - encoder
+function encode(rv,      // @param ByteArray: result
+                mix,     // @param Mix: source data
+                depth) { // @param Number: depth
+    var size, i, iz, c, pos,        // for UTF8.encode, Array.encode, Hash.encode
+        high, low, sign, exp, frac; // for IEEE754
+
+    if (mix == null) { // null or undefined -> 0xc0 ( null )
+        rv.push(0xc0);
+    } else if (mix === false) { // false -> 0xc2 ( false )
+        rv.push(0xc2);
+    } else if (mix === true) {  // true  -> 0xc3 ( true  )
+        rv.push(0xc3);
+    } else {
+        switch (typeof mix) {
+        case "number":
+            if (mix !== mix) { // isNaN
+                rv.push(0xcb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff); // quiet NaN
+            } else if (mix === Infinity) {
+                rv.push(0xcb, 0x7f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00); // positive infinity
+            } else if (Math.floor(mix) === mix) { // int or uint
+                if (mix < 0) {
+                    // int
+                    if (mix >= -32) { // negative fixnum
+                        rv.push(0xe0 + mix + 32);
+                    } else if (mix > -0x80) {
+                        rv.push(0xd0, mix + 0x100);
+                    } else if (mix > -0x8000) {
+                        mix += 0x10000;
+                        rv.push(0xd1, mix >> 8, mix & 0xff);
+                    } else if (mix > -0x80000000) {
+                        mix += 0x100000000;
+                        rv.push(0xd2, mix >>> 24, (mix >> 16) & 0xff,
+                                                  (mix >>  8) & 0xff, mix & 0xff);
+                    } else {
+                        high = Math.floor(mix / 0x100000000);
+                        low  = mix & 0xffffffff;
+                        rv.push(0xd3, (high >> 24) & 0xff, (high >> 16) & 0xff,
+                                      (high >>  8) & 0xff,         high & 0xff,
+                                      (low  >> 24) & 0xff, (low  >> 16) & 0xff,
+                                      (low  >>  8) & 0xff,          low & 0xff);
+                    }
+                } else {
+                    // uint
+                    if (mix < 0x80) {
+                        rv.push(mix); // positive fixnum
+                    } else if (mix < 0x100) { // uint 8
+                        rv.push(0xcc, mix);
+                    } else if (mix < 0x10000) { // uint 16
+                        rv.push(0xcd, mix >> 8, mix & 0xff);
+                    } else if (mix < 0x100000000) { // uint 32
+                        rv.push(0xce, mix >>> 24, (mix >> 16) & 0xff,
+                                                  (mix >>  8) & 0xff, mix & 0xff);
+                    } else {
+                        high = Math.floor(mix / 0x100000000);
+                        low  = mix & 0xffffffff;
+                        rv.push(0xcf, (high >> 24) & 0xff, (high >> 16) & 0xff,
+                                      (high >>  8) & 0xff,         high & 0xff,
+                                      (low  >> 24) & 0xff, (low  >> 16) & 0xff,
+                                      (low  >>  8) & 0xff,          low & 0xff);
+                    }
+                }
+            } else { // double
+                // THX!! @edvakf
+                // http://javascript.g.hatena.ne.jp/edvakf/20101128/1291000731
+                sign = mix < 0;
+                sign && (mix *= -1);
+
+                // add offset 1023 to ensure positive
+                // 0.6931471805599453 = Math.LN2;
+                exp  = ((Math.log(mix) / 0.6931471805599453) + 1023) | 0;
+
+                // shift 52 - (exp - 1023) bits to make integer part exactly 53 bits,
+                // then throw away trash less than decimal point
+                frac = mix * Math.pow(2, 52 + 1023 - exp);
+
+                //  S+-Exp(11)--++-----------------Fraction(52bits)-----------------------+
+                //  ||          ||                                                        |
+                //  v+----------++--------------------------------------------------------+
+                //  00000000|00000000|00000000|00000000|00000000|00000000|00000000|00000000
+                //  6      5    55  4        4        3        2        1        8        0
+                //  3      6    21  8        0        2        4        6
+                //
+                //  +----------high(32bits)-----------+ +----------low(32bits)------------+
+                //  |                                 | |                                 |
+                //  +---------------------------------+ +---------------------------------+
+                //  3      2    21  1        8        0
+                //  1      4    09  6
+                low  = frac & 0xffffffff;
+                sign && (exp |= 0x800);
+                high = ((frac / 0x100000000) & 0xfffff) | (exp << 20);
+
+                rv.push(0xcb, (high >> 24) & 0xff, (high >> 16) & 0xff,
+                              (high >>  8) & 0xff,  high        & 0xff,
+                              (low  >> 24) & 0xff, (low  >> 16) & 0xff,
+                              (low  >>  8) & 0xff,  low         & 0xff);
+            }
+            break;
+        case "string":
+            // http://d.hatena.ne.jp/uupaa/20101128
+            iz = mix.length;
+            pos = rv.length; // keep rewrite position
+
+            rv.push(0); // placeholder
+
+            // utf8.encode
+            for (i = 0; i < iz; ++i) {
+                c = mix.charCodeAt(i);
+                if (c < 0x80) { // ASCII(0x00 ~ 0x7f)
+                    rv.push(c & 0x7f);
+                } else if (c < 0x0800) {
+                    rv.push(((c >>>  6) & 0x1f) | 0xc0, (c & 0x3f) | 0x80);
+                } else if (c < 0x10000) {
+                    rv.push(((c >>> 12) & 0x0f) | 0xe0,
+                            ((c >>>  6) & 0x3f) | 0x80, (c & 0x3f) | 0x80);
+                }
+            }
+            size = rv.length - pos - 1;
+
+            if (size < 32) {
+                rv[pos] = 0xa0 + size; // rewrite
+            } else if (size < 0x100) { // 8
+                rv.splice(pos, 1, 0xd9, size);
+            } else if (size < 0x10000) { // 16
+                rv.splice(pos, 1, 0xda, size >> 8, size & 0xff);
+            } else if (size < 0x100000000) { // 32
+                rv.splice(pos, 1, 0xdb,
+                          size >>> 24, (size >> 16) & 0xff,
+                                       (size >>  8) & 0xff, size & 0xff);
+            }
+            break;
+        default: // array, hash, or Uint8Array
+            if (_isUint8Array(mix)) {
+                size = mix.length;
+
+                if (size < 0x100) { // 8
+                    rv.push(0xc4, size);
+                } else if (size < 0x10000) { // 16
+                    rv.push(0xc5, size >> 8, size & 0xff);
+                } else if (size < 0x100000000) { // 32
+                    rv.push(0xc6, size >>> 24, (size >> 16) & 0xff,
+                            (size >>  8) & 0xff, size & 0xff);
+                }
+                Array.prototype.push.apply(rv, mix);
+                break;
+            }
+            if (++depth >= _MAX_DEPTH) {
+                _error = 1; // CYCLIC_REFERENCE_ERROR
+                return rv = []; // clear
+            }
+            if (_isArray(mix)) {
+                size = mix.length;
+                if (size < 16) {
+                    rv.push(0x90 + size);
+                } else if (size < 0x10000) { // 16
+                    rv.push(0xdc, size >> 8, size & 0xff);
+                } else if (size < 0x100000000) { // 32
+                    rv.push(0xdd, size >>> 24, (size >> 16) & 0xff,
+                                               (size >>  8) & 0xff, size & 0xff);
+                }
+                for (i = 0; i < size; ++i) {
+                    encode(rv, mix[i], depth);
+                }
+            } else { // hash
+                // http://d.hatena.ne.jp/uupaa/20101129
+                pos = rv.length; // keep rewrite position
+                rv.push(0); // placeholder
+                size = 0;
+                for (i in mix) {
+                    ++size;
+                    encode(rv, i,      depth);
+                    encode(rv, mix[i], depth);
+                }
+                if (size < 16) {
+                    rv[pos] = 0x80 + size; // rewrite
+                } else if (size < 0x10000) { // 16
+                    rv.splice(pos, 1, 0xde, size >> 8, size & 0xff);
+                } else if (size < 0x100000000) { // 32
+                    rv.splice(pos, 1, 0xdf,
+                              size >>> 24, (size >> 16) & 0xff,
+                                           (size >>  8) & 0xff, size & 0xff);
+                }
+            }
+        }
+    }
+    return rv;
+}
+
+// inner - decoder
+function decode() { // @return Mix:
+    var size, i, iz, c, num = 0,
+        sign, exp, frac, ary, hash,
+        buf = _buf, type = buf[++_idx];
+
+    if (type >= 0xe0) {             // Negative FixNum (111x xxxx) (-32 ~ -1)
+        return type - 0x100;
+    }
+    if (type < 0xc0) {
+        if (type < 0x80) {          // Positive FixNum (0xxx xxxx) (0 ~ 127)
+            return type;
+        }
+        if (type < 0x90) {          // FixMap (1000 xxxx)
+            num  = type - 0x80;
+            type = 0x80;
+        } else if (type < 0xa0) {   // FixArray (1001 xxxx)
+            num  = type - 0x90;
+            type = 0x90;
+        } else { // if (type < 0xc0) {   // FixRaw (101x xxxx)
+            num  = type - 0xa0;
+            type = 0xa0;
+        }
+    }
+    switch (type) {
+    case 0xc0:  return null;
+    case 0xc2:  return false;
+    case 0xc3:  return true;
+    case 0xca:  // float
+                num = buf[++_idx] * 0x1000000 + (buf[++_idx] << 16) +
+                                                (buf[++_idx] <<  8) + buf[++_idx];
+                sign =  num & 0x80000000;    //  1bit
+                exp  = (num >> 23) & 0xff;   //  8bits
+                frac =  num & 0x7fffff;      // 23bits
+                if (!num || num === 0x80000000) { // 0.0 or -0.0
+                    return 0;
+                }
+                if (exp === 0xff) { // NaN or Infinity
+                    return frac ? NaN : Infinity;
+                }
+                return (sign ? -1 : 1) *
+                            (frac | 0x800000) * Math.pow(2, exp - 127 - 23); // 127: bias
+    case 0xcb:  // double
+                num = buf[++_idx] * 0x1000000 + (buf[++_idx] << 16) +
+                                                (buf[++_idx] <<  8) + buf[++_idx];
+                sign =  num & 0x80000000;    //  1bit
+                exp  = (num >> 20) & 0x7ff;  // 11bits
+                frac =  num & 0xfffff;       // 52bits - 32bits (high word)
+                if (!num || num === 0x80000000) { // 0.0 or -0.0
+                    _idx += 4;
+                    return 0;
+                }
+                if (exp === 0x7ff) { // NaN or Infinity
+                    _idx += 4;
+                    return frac ? NaN : Infinity;
+                }
+                num = buf[++_idx] * 0x1000000 + (buf[++_idx] << 16) +
+                                                (buf[++_idx] <<  8) + buf[++_idx];
+                return (sign ? -1 : 1) *
+                            ((frac | 0x100000) * Math.pow(2, exp - 1023 - 20) // 1023: bias
+                             + num * Math.pow(2, exp - 1023 - 52));
+    // 0xcf: uint64, 0xce: uint32, 0xcd: uint16
+    case 0xcf:  num =  buf[++_idx] * 0x1000000 + (buf[++_idx] << 16) +
+                                                 (buf[++_idx] <<  8) + buf[++_idx];
+                return num * 0x100000000 +
+                       buf[++_idx] * 0x1000000 + (buf[++_idx] << 16) +
+                                                 (buf[++_idx] <<  8) + buf[++_idx];
+    case 0xce:  num += buf[++_idx] * 0x1000000 + (buf[++_idx] << 16);
+    case 0xcd:  num += buf[++_idx] << 8;
+    case 0xcc:  return num + buf[++_idx];
+    // 0xd3: int64, 0xd2: int32, 0xd1: int16, 0xd0: int8
+    case 0xd3:  num = buf[++_idx];
+                if (num & 0x80) { // sign -> avoid overflow
+                    return ((num         ^ 0xff) * 0x100000000000000 +
+                            (buf[++_idx] ^ 0xff) *   0x1000000000000 +
+                            (buf[++_idx] ^ 0xff) *     0x10000000000 +
+                            (buf[++_idx] ^ 0xff) *       0x100000000 +
+                            (buf[++_idx] ^ 0xff) *         0x1000000 +
+                            (buf[++_idx] ^ 0xff) *           0x10000 +
+                            (buf[++_idx] ^ 0xff) *             0x100 +
+                            (buf[++_idx] ^ 0xff) + 1) * -1;
+                }
+                return num         * 0x100000000000000 +
+                       buf[++_idx] *   0x1000000000000 +
+                       buf[++_idx] *     0x10000000000 +
+                       buf[++_idx] *       0x100000000 +
+                       buf[++_idx] *         0x1000000 +
+                       buf[++_idx] *           0x10000 +
+                       buf[++_idx] *             0x100 +
+                       buf[++_idx];
+    case 0xd2:  num  =  buf[++_idx] * 0x1000000 + (buf[++_idx] << 16) +
+                       (buf[++_idx] << 8) + buf[++_idx];
+                return num < 0x80000000 ? num : num - 0x100000000; // 0x80000000 * 2
+    case 0xd1:  num  = (buf[++_idx] << 8) + buf[++_idx];
+                return num < 0x8000 ? num : num - 0x10000; // 0x8000 * 2
+    case 0xd0:  num  =  buf[++_idx];
+                return num < 0x80 ? num : num - 0x100; // 0x80 * 2
+    // 0xdb: str32, 0xda: str16, 0xd9: str8, 0xa0: fixstr
+    case 0xdb:  num += buf[++_idx] * 0x1000000 + (buf[++_idx] << 16);
+    case 0xda:  num += buf[++_idx] << 8;
+    case 0xd9:  num += buf[++_idx];
+    case 0xa0:  // utf8.decode
+                for (ary = [], i = _idx, iz = i + num; i < iz; ) {
+                    c = buf[++i]; // lead byte
+                    ary.push(c < 0x80 ? c : // ASCII(0x00 ~ 0x7f)
+                             c < 0xe0 ? ((c & 0x1f) <<  6 | (buf[++i] & 0x3f)) :
+                                        ((c & 0x0f) << 12 | (buf[++i] & 0x3f) << 6
+                                                          | (buf[++i] & 0x3f)));
+                }
+                _idx = i;
+                return ary.length < 10240 ? _toString.apply(null, ary)
+                                          : byteArrayToByteString(ary);
+    // 0xc6: bin32, 0xc5: bin16, 0xc4: bin8
+    case 0xc6:  num += buf[++_idx] * 0x1000000 + (buf[++_idx] << 16);
+    case 0xc5:  num += buf[++_idx] << 8;
+    case 0xc4:  num += buf[++_idx];
+                var end = ++_idx + num
+                var ret = buf.slice(_idx, end);
+                _idx += num;
+                return ret;
+    // 0xdf: map32, 0xde: map16, 0x80: map
+    case 0xdf:  num +=  buf[++_idx] * 0x1000000 + (buf[++_idx] << 16);
+    case 0xde:  num += (buf[++_idx] << 8)       +  buf[++_idx];
+    case 0x80:  hash = {};
+                while (num--) {
+                    // make key/value pair
+                    size = buf[++_idx] - 0xa0;
+
+                    for (ary = [], i = _idx, iz = i + size; i < iz; ) {
+                        c = buf[++i]; // lead byte
+                        ary.push(c < 0x80 ? c : // ASCII(0x00 ~ 0x7f)
+                                 c < 0xe0 ? ((c & 0x1f) <<  6 | (buf[++i] & 0x3f)) :
+                                            ((c & 0x0f) << 12 | (buf[++i] & 0x3f) << 6
+                                                              | (buf[++i] & 0x3f)));
+                    }
+                    _idx = i;
+                    hash[_toString.apply(null, ary)] = decode();
+                }
+                return hash;
+    // 0xdd: array32, 0xdc: array16, 0x90: array
+    case 0xdd:  num +=  buf[++_idx] * 0x1000000 + (buf[++_idx] << 16);
+    case 0xdc:  num += (buf[++_idx] << 8)       +  buf[++_idx];
+    case 0x90:  ary = [];
+                while (num--) {
+                    ary.push(decode());
+                }
+                return ary;
+    }
+    return;
+}
+
+// inner - byteArray To ByteString
+function byteArrayToByteString(byteArray) { // @param ByteArray
+                                            // @return String
+    // http://d.hatena.ne.jp/uupaa/20101128
+    try {
+        return _toString.apply(this, byteArray); // toString
+    } catch(err) {
+        ; // avoid "Maximum call stack size exceeded"
+    }
+    var rv = [], i = 0, iz = byteArray.length, num2bin = _num2bin;
+
+    for (; i < iz; ++i) {
+        rv[i] = num2bin[byteArray[i]];
+    }
+    return rv.join("");
+}
+
+// msgpack.download - load from server
+function msgpackdownload(url,        // @param String:
+                         option,     // @param Hash: { worker, timeout, before, after }
+                                     //    option.worker - Boolean(= false): true is use WebWorkers
+                                     //    option.timeout - Number(= 10): timeout sec
+                                     //    option.before  - Function: before(xhr, option)
+                                     //    option.after   - Function: after(xhr, option, { status, ok })
+                         callback) { // @param Function: callback(data, option, { status, ok })
+                                     //    data   - Mix/null:
+                                     //    option - Hash:
+                                     //    status - Number: HTTP status code
+                                     //    ok     - Boolean:
+    option.method = "GET";
+    option.binary = true;
+    ajax(url, option, callback);
+}
+
+// msgpack.upload - save to server
+function msgpackupload(url,        // @param String:
+                       option,     // @param Hash: { data, worker, timeout, before, after }
+                                   //    option.data - Mix:
+                                   //    option.worker - Boolean(= false): true is use WebWorkers
+                                   //    option.timeout - Number(= 10): timeout sec
+                                   //    option.before  - Function: before(xhr, option)
+                                   //    option.after   - Function: after(xhr, option, { status, ok })
+                       callback) { // @param Function: callback(data, option, { status, ok })
+                                   //    data   - String: responseText
+                                   //    option - Hash:
+                                   //    status - Number: HTTP status code
+                                   //    ok     - Boolean:
+    option.method = "PUT";
+    option.binary = true;
+
+    if (option.worker && globalScope.Worker) {
+        var worker = new Worker(msgpack.worker);
+
+        worker.onmessage = function(event) {
+            option.data = event.data;
+            ajax(url, option, callback);
+        };
+        worker.postMessage({ method: "pack", data: option.data });
+    } else {
+        // pack and base64 encode
+        option.data = base64encode(msgpackpack(option.data));
+        ajax(url, option, callback);
+    }
+}
+
+// inner -
+function ajax(url,        // @param String:
+              option,     // @param Hash: { data, ifmod, method, timeout,
+                          //                header, binary, before, after, worker }
+                          //    option.data    - Mix: upload data
+                          //    option.ifmod   - Boolean: true is "If-Modified-Since" header
+                          //    option.method  - String: "GET", "POST", "PUT"
+                          //    option.timeout - Number(= 10): timeout sec
+                          //    option.header  - Hash(= {}): { key: "value", ... }
+                          //    option.binary  - Boolean(= false): true is binary data
+                          //    option.before  - Function: before(xhr, option)
+                          //    option.after   - Function: after(xhr, option, { status, ok })
+                          //    option.worker  - Boolean(= false): true is use WebWorkers
+              callback) { // @param Function: callback(data, option, { status, ok })
+                          //    data   - String/Mix/null:
+                          //    option - Hash:
+                          //    status - Number: HTTP status code
+                          //    ok     - Boolean:
+    function readyStateChange() {
+        if (xhr.readyState === 4) {
+            var data, status = xhr.status, worker, byteArray,
+                rv = { status: status, ok: status >= 200 && status < 300 };
+
+            if (!run++) {
+                if (method === "PUT") {
+                    data = rv.ok ? xhr.responseText : "";
+                } else {
+                    if (rv.ok) {
+                        if (option.worker && globalScope.Worker) {
+                            worker = new Worker(msgpack.worker);
+                            worker.onmessage = function(event) {
+                                callback(event.data, option, rv);
+                            };
+                            worker.postMessage({ method: "unpack",
+                                                 data: xhr.responseText });
+                            gc();
+                            return;
+                        } else {
+                            byteArray = _ie ? toByteArrayIE(xhr)
+                                            : toByteArray(xhr.responseText);
+                            data = msgpackunpack(byteArray);
+                        }
+                    }
+                }
+                after && after(xhr, option, rv);
+                callback(data, option, rv);
+                gc();
+            }
+        }
+    }
+
+    function ng(abort, status) {
+        if (!run++) {
+            var rv = { status: status || 400, ok: false };
+
+            after && after(xhr, option, rv);
+            callback(null, option, rv);
+            gc(abort);
+        }
+    }
+
+    function gc(abort) {
+        abort && xhr && xhr.abort && xhr.abort();
+        watchdog && (clearTimeout(watchdog), watchdog = 0);
+        xhr = null;
+        globalScope.addEventListener &&
+            globalScope.removeEventListener("beforeunload", ng, false);
+    }
+
+    var watchdog = 0,
+        method = option.method || "GET",
+        header = option.header || {},
+        before = option.before,
+        after = option.after,
+        data = option.data || null,
+        xhr = globalScope.XMLHttpRequest ? new XMLHttpRequest() :
+              globalScope.ActiveXObject  ? new ActiveXObject("Microsoft.XMLHTTP") :
+              null,
+        run = 0, i,
+        overrideMimeType = "overrideMimeType",
+        setRequestHeader = "setRequestHeader",
+        getbinary = method === "GET" && option.binary;
+
+    try {
+        xhr.onreadystatechange = readyStateChange;
+        xhr.open(method, url, true); // ASync
+
+        before && before(xhr, option);
+
+        getbinary && xhr[overrideMimeType] &&
+            xhr[overrideMimeType]("text/plain; charset=x-user-defined");
+        data &&
+            xhr[setRequestHeader]("Content-Type",
+                                  "application/x-www-form-urlencoded");
+
+        for (i in header) {
+            xhr[setRequestHeader](i, header[i]);
+        }
+
+        globalScope.addEventListener &&
+            globalScope.addEventListener("beforeunload", ng, false); // 400: Bad Request
+
+        xhr.send(data);
+        watchdog = setTimeout(function() {
+            ng(1, 408); // 408: Request Time-out
+        }, (option.timeout || 10) * 1000);
+    } catch (err) {
+        ng(0, 400); // 400: Bad Request
+    }
+}
+
+// inner - BinaryString To ByteArray
+function toByteArray(data) { // @param BinaryString: "\00\01"
+                             // @return ByteArray: [0x00, 0x01]
+    var rv = [], bin2num = _bin2num, remain,
+        ary = data.split(""),
+        i = -1, iz;
+
+    iz = ary.length;
+    remain = iz % 8;
+
+    while (remain--) {
+        ++i;
+        rv[i] = bin2num[ary[i]];
+    }
+    remain = iz >> 3;
+    while (remain--) {
+        rv.push(bin2num[ary[++i]], bin2num[ary[++i]],
+                bin2num[ary[++i]], bin2num[ary[++i]],
+                bin2num[ary[++i]], bin2num[ary[++i]],
+                bin2num[ary[++i]], bin2num[ary[++i]]);
+    }
+    return rv;
+}
+
+// inner - BinaryString to ByteArray
+function toByteArrayIE(xhr) {
+    var rv = [], data, remain,
+        charCodeAt = "charCodeAt",
+        loop, v0, v1, v2, v3, v4, v5, v6, v7,
+        i = -1, iz;
+
+    iz = vblen(xhr);
+    data = vbstr(xhr);
+    loop = Math.ceil(iz / 2);
+    remain = loop % 8;
+
+    while (remain--) {
+        v0 = data[charCodeAt](++i); // 0x00,0x01 -> 0x0100
+        rv.push(v0 & 0xff, v0 >> 8);
+    }
+    remain = loop >> 3;
+    while (remain--) {
+        v0 = data[charCodeAt](++i);
+        v1 = data[charCodeAt](++i);
+        v2 = data[charCodeAt](++i);
+        v3 = data[charCodeAt](++i);
+        v4 = data[charCodeAt](++i);
+        v5 = data[charCodeAt](++i);
+        v6 = data[charCodeAt](++i);
+        v7 = data[charCodeAt](++i);
+        rv.push(v0 & 0xff, v0 >> 8, v1 & 0xff, v1 >> 8,
+                v2 & 0xff, v2 >> 8, v3 & 0xff, v3 >> 8,
+                v4 & 0xff, v4 >> 8, v5 & 0xff, v5 >> 8,
+                v6 & 0xff, v6 >> 8, v7 & 0xff, v7 >> 8);
+    }
+    iz % 2 && rv.pop();
+
+    return rv;
+}
+
+// inner - base64.encode
+function base64encode(data) { // @param ByteArray:
+                              // @return Base64String:
+    var rv = [],
+        c = 0, i = -1, iz = data.length,
+        pad = [0, 2, 1][data.length % 3],
+        num2bin = _num2bin,
+        num2b64 = _num2b64;
+
+    if (globalScope.btoa) {
+        while (i < iz) {
+            rv.push(num2bin[data[++i]]);
+        }
+        return btoa(rv.join(""));
+    }
+    --iz;
+    while (i < iz) {
+        c = (data[++i] << 16) | (data[++i] << 8) | (data[++i]); // 24bit
+        rv.push(num2b64[(c >> 18) & 0x3f],
+                num2b64[(c >> 12) & 0x3f],
+                num2b64[(c >>  6) & 0x3f],
+                num2b64[ c        & 0x3f]);
+    }
+    pad > 1 && (rv[rv.length - 2] = "=");
+    pad > 0 && (rv[rv.length - 1] = "=");
+    return rv.join("");
+}
+
+// --- init ---
+(function() {
+    var i = 0, v;
+
+    for (; i < 0x100; ++i) {
+        v = _toString(i);
+        _bin2num[v] = i; // "\00" -> 0x00
+        _num2bin[i] = v; //     0 -> "\00"
+    }
+    // http://twitter.com/edvakf/statuses/15576483807
+    for (i = 0x80; i < 0x100; ++i) { // [Webkit][Gecko]
+        _bin2num[_toString(0xf700 + i)] = i; // "\f780" -> 0x80
+    }
+})();
+})(this);
