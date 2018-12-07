@@ -35,30 +35,50 @@ Log(txt.text);
 Log(typeof "" === "string");
 Log(typeof go);
 
-Logger.Log("Number={0},Go={1}")
-
 Startup.text.text = "wtf";
-Startup.CallByJs();
 
 //msgpack test
 
+/*
 var data = {
     number: 123,
     number2: -0.129,
     text: "Abc with Üñıçôðé and ユニコード",
     flag: true,
     list: [ 1, 2, 3 ],
-    obj: { a: 1, b: "2", c: false, d: { a: 0, b: -1 } },
-    time: Date.now()
+    obj: { a: 1, b: "2", c: false },
 };
+*/
+
+var data = [
+     123,
+     0.129,
+     "Abc with Üñıçôðé and ユニコード",
+     true,
+	  [ 1, 2, 3 ],
+	  [ 1, "2", false ],
+];
 
 Log(data.text);
 
 var buffer = msgpack.pack(data);
 Log(buffer.length);
 
-var decoded = msgpack.unpack(buffer);
-Log(decoded.time);
+Startup.DeserializeByJs(buffer);
+
+var Diag = importNamespace("System.Diagnostics")
+var stopWatch = new Diag.Stopwatch();
+
+function test() {
+	for(var i =0; i < 10000; i++)
+	{
+		var decoded = msgpack.unpack(buffer);
+	}
+}
+
+
+
+
 
 
 
