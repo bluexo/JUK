@@ -1,15 +1,15 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
-using UnityEditor;
 using UnityEngine;
 
+#if UNITY_EDITOR
 namespace JUK
 {
-    public class JUKConfiguration : ScriptableSingleton<JUKConfiguration>
+    using UnityEditor;
+    public class JSConf : ScriptableSingleton<JSConf>
     {
-        public bool DebugMode;
-        public bool IsStrict;
         public string JsprojPath;
         public string OutputPath;
     }
 }
+#endif

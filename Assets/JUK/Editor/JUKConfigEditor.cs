@@ -40,26 +40,19 @@ namespace JUK
 
         public void OnGUI()
         {
-            var jsprojPath = EditorGUILayout.TextField(nameof(JUKConfiguration.instance.JsprojPath),
-              JUKConfiguration.instance.JsprojPath);
+            var jsprojPath = EditorGUILayout.TextField(nameof(JSConf.instance.JsprojPath),
+              JSConf.instance.JsprojPath);
             if (string.IsNullOrWhiteSpace(jsprojPath))
-                jsprojPath = Path.Combine(Directory.GetCurrentDirectory(), "Jsproj");
-            JUKConfiguration.instance.JsprojPath = jsprojPath;
+                jsprojPath = Path.Combine(Directory.GetCurrentDirectory(), "Jsproj").Replace('\\', '/') + "/";
+            JSConf.instance.JsprojPath = jsprojPath;
 
-            var outputPath = EditorGUILayout.TextField(nameof(JUKConfiguration.instance.OutputPath),
-             JUKConfiguration.instance.OutputPath);
+            var outputPath = EditorGUILayout.TextField(nameof(JSConf.instance.OutputPath),
+             JSConf.instance.OutputPath);
             if (string.IsNullOrWhiteSpace(outputPath))
-                outputPath = Path.Combine(Application.streamingAssetsPath, "dist");
-            JUKConfiguration.instance.OutputPath = outputPath;
+                outputPath = Path.Combine(Application.streamingAssetsPath, "dist").Replace('\\', '/') + "/";
+            JSConf.instance.OutputPath = outputPath;
 
-            var debugMode = EditorGUILayout.Toggle(nameof(JUKConfiguration.instance.DebugMode),
-                JUKConfiguration.instance.DebugMode);
-            JUKConfiguration.instance.DebugMode = debugMode;
-
-            var strict = EditorGUILayout.Toggle(nameof(JUKConfiguration.instance.IsStrict),
-                JUKConfiguration.instance.IsStrict);
-            JUKConfiguration.instance.IsStrict = strict;
-            EditorUtility.SetDirty(JUKConfiguration.instance);
+            EditorUtility.SetDirty(JSConf.instance);
         }
     }
 }

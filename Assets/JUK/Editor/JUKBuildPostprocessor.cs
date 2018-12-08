@@ -12,13 +12,13 @@ namespace JUK
         [MenuItem("JUK/Copy To Output")]
         public static void CopyToOutput()
         {
-            var path = JUKConfiguration.instance.JsprojPath;
+            var path = JSConf.instance.JsprojPath;
             if (string.IsNullOrWhiteSpace(path)) return;
             var files = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
             for (var i = 0; i < files.Length; i++)
             {
                 var file = new FileInfo(files[i]);
-                var dest = JUKConfiguration.instance.OutputPath;
+                var dest = JSConf.instance.OutputPath;
                 if (!Directory.Exists(dest))
                     Directory.CreateDirectory(dest);
                 file.CopyTo($"{dest}/{file.Name}.txt", true);
