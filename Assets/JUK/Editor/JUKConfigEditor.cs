@@ -19,6 +19,19 @@ namespace JUK
             window.maxSize = new Vector2(450, 400);
         }
 
+        [MenuItem("JUK/Debug Mode", priority = 1)]
+        public static void DebugMode()
+        {
+            EditorPrefs.SetBool(nameof(DebugMode), !EditorPrefs.GetBool(nameof(DebugMode), true));
+        }
+
+        [MenuItem("JUK/Debug Mode", priority = 1, validate = true)]
+        public static bool OpenEditorCheck()
+        {
+            Menu.SetChecked("JUK/Debug Mode", EditorPrefs.GetBool(nameof(DebugMode)));
+            return true;
+        }
+
         [InitializeOnLoadMethod]
         public static void RegisterBuildAction()
         {

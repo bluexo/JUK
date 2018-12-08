@@ -24,7 +24,6 @@ namespace JUK
                 typeof(PointerEventData).Assembly,
                 typeof(Stopwatch).Assembly);
             option.Strict();
-            option.DiscardGlobal();
             //option.DebugMode();
             //option.AllowDebuggerStatement();
         });
@@ -36,11 +35,7 @@ namespace JUK
             {
 #if UNITY_EDITOR
                 var files = Directory.GetFiles(Application.streamingAssetsPath + "/dist/", "*.txt", SearchOption.AllDirectories);
-                for (var i = 0; i < files.Length; i++)
-                {
-                    var txt = File.ReadAllText(files[i]);
-                    JsEngine.Execute(txt);
-                }
+                Array.ForEach(files, f => JsEngine.Execute(File.ReadAllText(f)));
 #else
 
 #endif
@@ -76,61 +71,6 @@ namespace JUK
                     $"{nameof(exc.CallStack)} = {exc.CallStack} \n");
             }
         }
-
-        [MessagePackObject]
-        public class Nested
-        {
-            [Key(0)]
-            public int a { get; set; }
-            [Key(1)]
-            public string b { get; set; }
-            [Key(2)]
-            public bool c { get; set; }
-        }
-
-        [MessagePackObject]
-        public class SampleData
-        {
-            [Key(0)]
-            public int number { get; set; }
-            [Key(1)]
-            public double number2 { get; set; }
-            [Key(2)]
-            public string text { get; set; }
-            [Key(3)]
-            public bool flag { get; set; }
-            [Key(4)]
-            public List<int> list { get; set; }
-            [Key(5)]
-            public Nested obj { get; set; }
-        }
-
-        public void DeserializeByJs(byte[] buffer)
-        {
-            var obj = MessagePackSerializer.Deserialize<SampleData>(buffer);
-            Debug.Log($"{obj.text},{obj.flag},{obj.list.Count}");
-            var sw = new Stopwatch();
-            sw.Reset();
-            sw.Start();
-            for (var i = 0; i < 10000; i++)
-            {
-                var newBuffer = MessagePackSerializer.Deserialize<SampleData>(buffer);
-            }
-            sw.Stop();
-            Debug.Log("-----CS");
-            Debug.Log($"{sw.ElapsedMilliseconds}");
-            Debug.Log("CS-----");
-
-            var test = JsEngine.GetValue("test");
-            sw.Reset();
-            sw.Start();
-            Debug.Log("-----JS");
-            test.Invoke();
-            Debug.Log(sw.ElapsedMilliseconds);
-            Debug.Log("JS-----");
-            sw.Stop();
-        }
-
 
         // Update is called once per frame
         private void Update()
